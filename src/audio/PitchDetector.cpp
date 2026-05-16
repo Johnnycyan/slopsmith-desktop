@@ -137,13 +137,22 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
     const float threshold = 0.15f;
     const int halfLen = length / 2;
 
-    std::vector<float> yinBuffer((size_t)halfLen);
+    // Restrict tau to the frequency range we care about.  This avoids scanning
+    // taus that correspond to undetectable or out-of-range pitches and keeps
+    // computation proportional to the useful search window.
+    //   tauMin → highest pitch of interest (2000 Hz)
+    //   tauMax → lowest pitch of interest (25 Hz covers B0/drop tunings)
+    //            capped at halfLen-1, which is the true YIN limit.
+    const int tauMin = std::max(2, (int)std::ceil(sampleRate / 2000.0f));
+    const int tauMax = std::min(halfLen - 1, (int)std::ceil(sampleRate / 25.0f));
 
-    // Difference function
+    std::vector<float> yinBuffer((size_t)(tauMax + 1));
+
+    // Difference function — compute only up to tauMax
     float runningSum = 0.0f;
     yinBuffer[0] = 1.0f;
 
-    for (int tau = 1; tau < halfLen; ++tau)
+    for (int tau = 1; tau <= tauMax; ++tau)
     {
         float sum = 0.0f;
         for (int i = 0; i < halfLen; ++i)
@@ -159,25 +168,25 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
             yinBuffer[(size_t)tau] *= (float)tau / runningSum;
     }
 
-    // Absolute threshold
-    int tau = 2;
-    while (tau < halfLen)
+    // Absolute threshold — search only within the detectable pitch range
+    int tau = tauMin;
+    while (tau <= tauMax)
     {
         if (yinBuffer[(size_t)tau] < threshold)
         {
-            while (tau + 1 < halfLen && yinBuffer[(size_t)(tau + 1)] < yinBuffer[(size_t)tau])
+            while (tau + 1 <= tauMax && yinBuffer[(size_t)(tau + 1)] < yinBuffer[(size_t)tau])
                 ++tau;
             break;
         }
         ++tau;
     }
 
-    if (tau == halfLen) return -1.0f; // no pitch detected
+    if (tau > tauMax) return -1.0f; // no pitch detected
 
     // Parabolic interpolation for sub-sample accuracy
     float s0 = tau > 0 ? yinBuffer[(size_t)(tau - 1)] : yinBuffer[(size_t)tau];
     float s1 = yinBuffer[(size_t)tau];
-    float s2 = (tau + 1 < halfLen) ? yinBuffer[(size_t)(tau + 1)] : yinBuffer[(size_t)tau];
+    float s2 = (tau + 1 <= tauMax) ? yinBuffer[(size_t)(tau + 1)] : yinBuffer[(size_t)tau];
 
     float denom = 2.0f * (s0 - 2.0f * s1 + s2);
     float betterTau = (std::abs(denom) > 1e-9f)
@@ -186,9 +195,13 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
 
     float freq = sampleRate / betterTau;
 
-    // Sanity check: guitar range is ~80 Hz (E2) to ~1320 Hz (E6); bass is ~41 Hz (E1) to ~330 Hz (E4),
+    // Sanity check: guitar range is ~80 Hz (E2) to ~1320 Hz (E6);
+    // bass is ~41 Hz (E1) to ~330 Hz (E4),
     // with some extended-range basses reaching ~31 Hz (B0)
-    if (freq < 20.0f || freq > 2000.0f) return -1.0f;
+    // with analysisSize=4096 the minimum detectable is ~23 Hz at
+    // 48 kHz; 25 Hz matches the tauMax bound and covers all extended-range bass
+    // tunings (B0 ~31 Hz, drop-A ~27.5 Hz) while rejecting sub-bass artefacts.
+    if (freq < 25.0f || freq > 2000.0f) return -1.0f;
 
     return freq;
 }

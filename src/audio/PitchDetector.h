@@ -50,8 +50,10 @@ private:
     juce::AbstractFifo fifo{4096};
     std::vector<float> fifoBuffer;
 
-    // Analysis buffer
-    static constexpr int analysisSize = 2048;
+    // Analysis buffer — 4096 samples gives halfLen=2048, so minimum detectable
+    // frequency is sampleRate/(halfLen-1) ≈ 23 Hz at 48 kHz, covering B0 (~31 Hz)
+    // and all common drop/extended-range bass tunings.
+    static constexpr int analysisSize = 4096;
     std::vector<float> analysisBuffer;
     int analysisWritePos = 0;
 
