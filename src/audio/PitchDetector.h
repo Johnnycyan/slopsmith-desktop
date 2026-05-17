@@ -38,8 +38,8 @@ public:
 private:
     void detectionThread();
 
-    // YIN algorithm
-    float yinDetect(const float* buffer, int length, float sampleRate) const;
+    // YIN algorithm — non-const: reuses the yinBuffer scratch member.
+    float yinDetect(const float* buffer, int length, float sampleRate);
 
     // MIDI note helpers
     static int frequencyToMidi(float freq, float tuningRef);
@@ -89,11 +89,16 @@ private:
     // Analysis buffer — holds the most recent decimated (internal-rate)
     // samples, spanning >2 periods of the lowest note of interest (25 Hz).
     // Sized at prepare() time as 2 * (ceil(internalRate / 25) + 1); ~640
-    // samples regardless of device rate.  Default covers 44.1/48 kHz before
-    // prepare() is first called.
+    // samples regardless of device rate.  The initialiser is just a
+    // placeholder — detection only runs after prepare() has resized it.
     int analysisSize = 1024;
     std::vector<float> analysisBuffer;
     int analysisWritePos = 0;
+
+    // Detection-thread scratch buffers, sized in prepare() so the detection
+    // loop stays allocation-free.  Touched only by the detection thread.
+    std::vector<float> windowBuffer; // rearranged contiguous analysis window
+    std::vector<float> yinBuffer;    // YIN CMNDF working buffer
 
     // Results (atomic struct via padding)
     std::atomic<float> detectedFreq{-1.0f};

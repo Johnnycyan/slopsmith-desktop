@@ -69,6 +69,12 @@ void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
     analysisBuffer.assign((size_t)analysisSize, 0.0f);
     analysisWritePos = 0;
 
+    // Pre-size the detection-thread scratch buffers so the detection loop
+    // never allocates.  yinBuffer needs analysisSize/2 entries (halfLen),
+    // the upper bound on tauMax + 1.
+    windowBuffer.assign((size_t)analysisSize, 0.0f);
+    yinBuffer.assign((size_t)(analysisSize / 2), 0.0f);
+
     // Anti-aliasing low-pass below the post-decimation Nyquist (internalRate/2),
     // run at the device rate before decimation.  4th-order Butterworth via two
     // biquads with the standard section Q values.  The cutoff sits just above
@@ -155,12 +161,12 @@ void PitchDetector::detectionThread()
     for (int i = 0; i < scope.blockSize2; ++i)
         consume(fifoBuffer[(size_t)(scope.startIndex2 + i)]);
 
-    // Run YIN on the decimated analysis buffer (oldest sample first).
-    std::vector<float> window(analysisSize);
+    // Rearrange the ring buffer into the contiguous window scratch buffer
+    // (oldest sample first) and run YIN on it.
     for (int i = 0; i < analysisSize; ++i)
-        window[(size_t)i] = analysisBuffer[(size_t)((analysisWritePos + i) % analysisSize)];
+        windowBuffer[(size_t)i] = analysisBuffer[(size_t)((analysisWritePos + i) % analysisSize)];
 
-    float freq = yinDetect(window.data(), analysisSize, (float)internalRate);
+    float freq = yinDetect(windowBuffer.data(), analysisSize, (float)internalRate);
 
     if (freq > 0.0f)
     {
@@ -186,7 +192,7 @@ void PitchDetector::detectionThread()
 // ── YIN Algorithm ─────────────────────────────────────────────────────────────
 // Ported from Slopsmith's note_detect plugin JavaScript implementation.
 
-float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate) const
+float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate)
 {
     const float threshold = 0.15f;
     const int halfLen = length / 2;
@@ -202,7 +208,8 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
     const int tauMin = std::max(2, (int)std::floor(sampleRate / 2000.0f));
     const int tauMax = std::min(halfLen - 1, (int)std::ceil(sampleRate / 25.0f));
 
-    std::vector<float> yinBuffer((size_t)(tauMax + 1));
+    // yinBuffer is the pre-sized scratch member (>= halfLen entries, so it
+    // always covers indices [0, tauMax]); only [0, tauMax] are written/read.
 
     // Difference function — compute only up to tauMax
     float runningSum = 0.0f;
