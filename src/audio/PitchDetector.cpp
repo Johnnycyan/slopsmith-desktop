@@ -147,7 +147,8 @@ void PitchDetector::detectionThread()
 
     // Anti-alias filter at the device rate, then decimate into the
     // internal-rate analysis buffer (keep every decimationFactor-th sample).
-    auto consume = [this](float raw)
+    int decimatedWritten = 0;
+    auto consume = [this, &decimatedWritten](float raw)
     {
         const float filtered = aaFilter[1].process(aaFilter[0].process(raw));
         if (++decimPhase >= decimationFactor)
@@ -155,6 +156,7 @@ void PitchDetector::detectionThread()
             decimPhase = 0;
             analysisBuffer[(size_t)analysisWritePos] = filtered;
             analysisWritePos = (analysisWritePos + 1) % analysisSize;
+            ++decimatedWritten;
         }
     };
 
@@ -163,6 +165,12 @@ void PitchDetector::detectionThread()
 
     for (int i = 0; i < scope.blockSize2; ++i)
         consume(fifoBuffer[(size_t)(scope.startIndex2 + i)]);
+
+    // If this tick read fewer raw samples than decimationFactor, no decimated
+    // sample was produced — the analysis window is unchanged, so skip the
+    // redundant YIN pass rather than re-publishing the same result.
+    if (decimatedWritten == 0)
+        return;
 
     // Rearrange the ring buffer into the contiguous window scratch buffer
     // (oldest sample first) and run YIN on it.
